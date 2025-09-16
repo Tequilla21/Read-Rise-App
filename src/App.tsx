@@ -920,7 +920,7 @@ function ChildView({
                     <td style={{padding:8}}>{row.author}</td>
                     <td style={{padding:8}}>{row.minutes}</td>
                     <td style={{padding:8}}>{row.pages}</td>
-                    <td style={{padding:8}}>{({red:"😡 Red",orange:"😕 Orange",yellow:"🙂 Yellow",green:"😃 Green"} as any)[row.mood]}</td>
+                    <td style={{padding:8}}>{moodLabel[row.mood]}</td>
                   </tr>
                 ))
               ) : (
@@ -931,8 +931,9 @@ function ChildView({
         </div>
         <div style={{marginTop:6, textAlign:"right", fontSize:13, color:BRAND.mutedText}}>
           Total minutes: <span style={{ color: BRAND.primary, fontWeight:600 }}>
-            {(logs[kid.name]||[]).reduce((s,row)=>s+(row.minutes||0),0)}
-          </span>
+  {totalMinutes}
+</span>
+
         </div>
       </div>
     </div>
