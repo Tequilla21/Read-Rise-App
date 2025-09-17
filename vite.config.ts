@@ -1,9 +1,11 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+// vite.config.ts
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 
-// https://vitejs.dev/config/
+const repo = "Read-Rise-App";
+const isPages = process.env.GITHUB_PAGES === "true";
+
 export default defineConfig({
   plugins: [react()],
-  // 👇 important for GitHub Pages (project page)
-  base: '/Read-Rise-App/', // replace with your repo name
-})
+  base: isPages ? `/${repo}/` : "/", // Pages vs Vercel
+});
