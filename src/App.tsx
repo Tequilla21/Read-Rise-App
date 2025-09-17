@@ -302,25 +302,28 @@ export default function App(){
   // Families (collection "families" - doc id is the code)
   useEffect(()=>{
     if (!authReady) return; // ✅ wait for auth
-    const unsub = onSnapshot(collection(db, "families"), (snap)=>{
-      const next: Family[] = [];
-      snap.forEach(docSnap=>{
-        const data = docSnap.data() as any;
-        if (data) {
-          next.push({
-            code: data.code,
-            parentName: data.parentName,
-            kids: Array.isArray(data.kids) ? data.kids : [],
-          });
-        }
-      });
-      // Sort by parent name for nicer list
-      next.sort((a,b)=> a.parentName.localeCompare(b.parentName));
-      setFamilies(next);
-    }, (err) => {
-      console.error("families onSnapshot error:", err);
-      alert("Can’t read families (permissions).");
-    });
+    const unsub = onSnapshot(
+      collection(db, "families"),
+      (snap)=>{
+        const next: Family[] = [];
+        snap.forEach(docSnap=>{
+          const data = docSnap.data() as any;
+          if (data) {
+            next.push({
+              code: data.code,
+              parentName: data.parentName,
+              kids: Array.isArray(data.kids) ? data.kids : [],
+            });
+          }
+        });
+        next.sort((a,b)=> a.parentName.localeCompare(b.parentName));
+        setFamilies(next);
+      },
+      (err) => {
+        console.error("families onSnapshot error:", err);
+        alert("Can’t read families (permissions).");
+      }
+    );
     return ()=>unsub();
   }, [authReady]);
 
@@ -328,16 +331,20 @@ export default function App(){
   useEffect(()=>{
     if (!authReady) return; // ✅ wait for auth
     const dref = doc(db, "incentives", monthKey);
-    const unsub = onSnapshot(dref, (snap)=>{
-      const data = snap.data() as any;
-      setIncentivesByMonth(prev => ({
-        ...prev,
-        [monthKey]: Array.isArray(data?.items) ? data.items : [],
-      }));
-    }, (err) => {
-      console.error("incentives onSnapshot error:", err);
-      alert("Can’t read incentives (permissions).");
-    });
+    const unsub = onSnapshot(
+      dref,
+      (snap)=>{
+        const data = snap.data() as any;
+        setIncentivesByMonth(prev => ({
+          ...prev,
+          [monthKey]: Array.isArray(data?.items) ? data.items : [],
+        }));
+      },
+      (err) => {
+        console.error("incentives onSnapshot error:", err);
+        alert("Can’t read incentives (permissions).");
+      }
+    );
     return ()=>unsub();
   }, [authReady, monthKey]);
 
@@ -557,6 +564,7 @@ export default function App(){
 
   if (!authReady) {
     return <div style={{ padding: 16, color: "#4B5563" }}>Loading…</div>;
+    // (Prevents UI from rendering until Firestore can read with anon auth)
   }
 
   return (
