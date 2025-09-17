@@ -13,7 +13,8 @@ import {
   onSnapshot,
   getDoc,
 } from "firebase/firestore";
-import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
+
 
 /* =========================
    Branding + Helpers
@@ -218,15 +219,16 @@ function ParentPromiseModal({ onClose }: { onClose: () => void }) {
 }
 
 export default function App(){
-  const [authReady, setAuthReady] = useState(false); // ✅ wait for anon auth
+  const [authReady, setAuthReady] = useState(false);
+
+  // ✅ Only set authReady to true when we actually have a user
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, () => setAuthReady(true));
-    signInAnonymously(auth).catch((e) => {
-      console.error("Anon sign-in failed:", e);
-      alert("Sign-in failed. Please refresh.");
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setAuthReady(!!user); // true if a user exists (even anonymous)
     });
     return () => unsub();
   }, []);
+
 
   const [showParentReminder, setShowParentReminder] = useState(false);
   const [view, setView] = useState<"landing"|"parent"|"adminLogin"|"admin">("landing");
@@ -300,53 +302,55 @@ export default function App(){
 
   // ======== Firestore LIVE SUBSCRIPTIONS ========
   // Families (collection "families" - doc id is the code)
-  useEffect(()=>{
-    if (!authReady) return; // ✅ wait for auth
-    const unsub = onSnapshot(
-      collection(db, "families"),
-      (snap)=>{
-        const next: Family[] = [];
-        snap.forEach(docSnap=>{
-          const data = docSnap.data() as any;
-          if (data) {
-            next.push({
-              code: data.code,
-              parentName: data.parentName,
-              kids: Array.isArray(data.kids) ? data.kids : [],
-            });
-          }
-        });
-        next.sort((a,b)=> a.parentName.localeCompare(b.parentName));
-        setFamilies(next);
-      },
-      (err) => {
-        console.error("families onSnapshot error:", err);
-        alert("Can’t read families (permissions).");
-      }
-    );
-    return ()=>unsub();
-  }, [authReady]);
+ useEffect(()=>{
+  if (!authReady) return;
+  const unsub = onSnapshot(
+    collection(db, "families"),
+    (snap) => {
+      const next: Family[] = [];
+      snap.forEach(docSnap => {
+        const data = docSnap.data() as any;
+        if (data) {
+          next.push({
+            code: data.code,
+            parentName: data.parentName,
+            kids: Array.isArray(data.kids) ? data.kids : [],
+          });
+        }
+      });
+      next.sort((a,b)=> a.parentName.localeCompare(b.parentName));
+      setFamilies(next);
+    },
+    (err) => {
+      console.error("families onSnapshot error:", err);
+      alert("Can’t read families (permissions).");
+    }
+  );
+  return () => unsub();
+}, [authReady]);
+
 
   // Incentives: listen only to the CURRENT month doc ("incentives/{YYYY-MM}")
   useEffect(()=>{
-    if (!authReady) return; // ✅ wait for auth
-    const dref = doc(db, "incentives", monthKey);
-    const unsub = onSnapshot(
-      dref,
-      (snap)=>{
-        const data = snap.data() as any;
-        setIncentivesByMonth(prev => ({
-          ...prev,
-          [monthKey]: Array.isArray(data?.items) ? data.items : [],
-        }));
-      },
-      (err) => {
-        console.error("incentives onSnapshot error:", err);
-        alert("Can’t read incentives (permissions).");
-      }
-    );
-    return ()=>unsub();
-  }, [authReady, monthKey]);
+  if (!authReady) return;
+  const dref = doc(db, "incentives", monthKey);
+  const unsub = onSnapshot(
+    dref,
+    (snap) => {
+      const data = snap.data() as any;
+      setIncentivesByMonth(prev => ({
+        ...prev,
+        [monthKey]: Array.isArray(data?.items) ? data.items : [],
+      }));
+    },
+    (err) => {
+      console.error("incentives onSnapshot error:", err);
+      alert("Can’t read incentives (permissions).");
+    }
+  );
+  return () => unsub();
+}, [authReady, monthKey]);
+
 
   // Confetti when goals done
   const [confetti, setConfetti] = useState<{show:boolean; forKid?:string}>({show:false});
