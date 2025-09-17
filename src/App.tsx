@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 /* =========================
-   Firebase (top-level imports only!)
+   Firebase (use shared firebase.ts)
    ========================= */
-import { initializeApp } from "firebase/app";
+import { db, auth } from "./firebase";  // ✅ your new project config
 import {
-  getFirestore,
   collection,
   doc,
   setDoc,
@@ -14,20 +13,7 @@ import {
   onSnapshot,
   getDoc,
 } from "firebase/firestore";
-
-/* ====== YOUR FIREBASE CONFIG (from Firebase console) ====== */
-const firebaseConfig = {
-  apiKey: "AIzaSyB7hSy1d4EvZrOzgIJD-jMAl91byGceanE",
-  authDomain: "eakc-c2ec1.firebaseapp.com",
-  projectId: "eakc-c2ec1",
-  storageBucket: "eakc-c2ec1.firebasestorage.app",
-  messagingSenderId: "581223973902",
-  appId: "1:581223973902:web:b8410c87b07f6c0952e85f",
-  measurementId: "G-1F67RZ4M3Z",
-};
-/* init app + db */
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 /* =========================
    Branding + Helpers
@@ -232,6 +218,16 @@ function ParentPromiseModal({ onClose }: { onClose: () => void }) {
 }
 
 export default function App(){
+  const [authReady, setAuthReady] = useState(false); // ✅ wait for anon auth
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, () => setAuthReady(true));
+    signInAnonymously(auth).catch((e) => {
+      console.error("Anon sign-in failed:", e);
+      alert("Sign-in failed. Please refresh.");
+    });
+    return () => unsub();
+  }, []);
+
   const [showParentReminder, setShowParentReminder] = useState(false);
   const [view, setView] = useState<"landing"|"parent"|"adminLogin"|"admin">("landing");
 
@@ -305,6 +301,7 @@ export default function App(){
   // ======== Firestore LIVE SUBSCRIPTIONS ========
   // Families (collection "families" - doc id is the code)
   useEffect(()=>{
+    if (!authReady) return; // ✅ wait for auth
     const unsub = onSnapshot(collection(db, "families"), (snap)=>{
       const next: Family[] = [];
       snap.forEach(docSnap=>{
@@ -320,12 +317,16 @@ export default function App(){
       // Sort by parent name for nicer list
       next.sort((a,b)=> a.parentName.localeCompare(b.parentName));
       setFamilies(next);
+    }, (err) => {
+      console.error("families onSnapshot error:", err);
+      alert("Can’t read families (permissions).");
     });
     return ()=>unsub();
-  }, []);
+  }, [authReady]);
 
   // Incentives: listen only to the CURRENT month doc ("incentives/{YYYY-MM}")
   useEffect(()=>{
+    if (!authReady) return; // ✅ wait for auth
     const dref = doc(db, "incentives", monthKey);
     const unsub = onSnapshot(dref, (snap)=>{
       const data = snap.data() as any;
@@ -333,9 +334,12 @@ export default function App(){
         ...prev,
         [monthKey]: Array.isArray(data?.items) ? data.items : [],
       }));
+    }, (err) => {
+      console.error("incentives onSnapshot error:", err);
+      alert("Can’t read incentives (permissions).");
     });
     return ()=>unsub();
-  }, [monthKey]);
+  }, [authReady, monthKey]);
 
   // Confetti when goals done
   const [confetti, setConfetti] = useState<{show:boolean; forKid?:string}>({show:false});
@@ -368,108 +372,138 @@ export default function App(){
 
   // ======== Firestore-backed Admin actions ========
   async function fsUpsertFamily(code:string, parentName:string){
-    const t = code.trim(); const p = parentName.trim();
-    if(!t || !p){ alert("Please enter both a Parent/Family Code and a Parent Name."); return; }
-    const ref = doc(db, "families", t);
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      const data = snap.data() as any;
-      // keep kids, update parentName if changed
-      await setDoc(ref, { code: t, parentName: p, kids: Array.isArray(data?.kids)?data.kids:[] }, { merge: true });
-      alert(`Code ${t} is set for ${p}.`);
-    } else {
-      await setDoc(ref, { code: t, parentName: p, kids: [] });
-      alert(`Parent created: ${p} (${t}).`);
+    try {
+      const t = code.trim(); const p = parentName.trim();
+      if(!t || !p){ alert("Please enter both a Parent/Family Code and a Parent Name."); return; }
+      const ref = doc(db, "families", t);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        await setDoc(ref, { code: t, parentName: p, kids: Array.isArray(data?.kids)?data.kids:[] }, { merge: true });
+        alert(`Code ${t} is set for ${p}.`);
+      } else {
+        await setDoc(ref, { code: t, parentName: p, kids: [] });
+        alert(`Parent created: ${p} (${t}).`);
+      }
+    } catch (e:any) {
+      console.error("fsUpsertFamily error:", e);
+      alert("Couldn’t save parent. Check Firestore rules & auth.");
     }
   }
 
   async function fsAddKid(code:string, kid: Omit<Kid,"id">){
-    const t = code.trim();
-    const cleanKidName = kid.name.trim();
-    if(!t || !cleanKidName){ alert("Please enter a Parent Code and Student Name."); return; }
+    try {
+      const t = code.trim();
+      const cleanKidName = kid.name.trim();
+      if(!t || !cleanKidName){ alert("Please enter a Parent Code and Student Name."); return; }
 
-    // Global duplicate name block
-    const normNew = normalizeKey(cleanKidName);
-    const dup = families.find(f => f.kids.some(k => normalizeKey(k.name) === normNew));
-    if (dup) { alert(`A student named "${cleanKidName}" already exists under ${dup.parentName} (${dup.code}).`); return; }
+      // Global duplicate name block
+      const normNew = normalizeKey(cleanKidName);
+      const dup = families.find(f => f.kids.some(k => normalizeKey(k.name) === normNew));
+      if (dup) { alert(`A student named "${cleanKidName}" already exists under ${dup.parentName} (${dup.code}).`); return; }
 
-    const ref = doc(db, "families", t);
-    const snap = await getDoc(ref);
-    if(!snap.exists()){ alert("That parent code doesn't exist yet. Please create it above."); return; }
+      const ref = doc(db, "families", t);
+      const snap = await getDoc(ref);
+      if(!snap.exists()){ alert("That parent code doesn't exist yet. Please create it above."); return; }
 
-    const data = snap.data() as any;
-    const id = `id_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
-    const nextKids = [...(Array.isArray(data?.kids)?data.kids:[]), { id, ...kid, name: cleanKidName }];
+      const data = snap.data() as any;
+      const id = `id_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
+      const nextKids = [...(Array.isArray(data?.kids)?data.kids:[]), { id, ...kid, name: cleanKidName }];
 
-    await updateDoc(ref, { kids: nextKids });
-    // local helpers for other maps
-    setAddedGoals(ag => ({ ...ag, [cleanKidName]: ag[cleanKidName] || [] }));
-    setLogs(lg => ({ ...lg, [cleanKidName]: lg[cleanKidName] || [] }));
+      await updateDoc(ref, { kids: nextKids });
+      // local helpers for other maps
+      setAddedGoals(ag => ({ ...ag, [cleanKidName]: ag[cleanKidName] || [] }));
+      setLogs(lg => ({ ...lg, [cleanKidName]: lg[cleanKidName] || [] }));
+    } catch(e:any){
+      console.error("fsAddKid error:", e);
+      alert("Couldn’t add student. Check Firestore rules & auth.");
+    }
   }
 
   async function fsRemoveKid(kidId:string){
-    // find family containing the kid
-    const fam = families.find(f => f.kids.some(k => k.id === kidId));
-    if(!fam) return;
-    const kid = fam.kids.find(k=>k.id===kidId)!;
-    if(!confirm(`Remove ${kid.name}? Their goals and logs will be deleted.`)) return;
+    try {
+      const fam = families.find(f => f.kids.some(k => k.id === kidId));
+      if(!fam) return;
+      const kid = fam.kids.find(k=>k.id===kidId)!;
+      if(!confirm(`Remove ${kid.name}? Their goals and logs will be deleted.`)) return;
 
-    const ref = doc(db, "families", fam.code);
-    const nextKids = fam.kids.filter(k=>k.id!==kidId);
-    await updateDoc(ref, { kids: nextKids });
+      const ref = doc(db, "families", fam.code);
+      const nextKids = fam.kids.filter(k=>k.id!==kidId);
+      await updateDoc(ref, { kids: nextKids });
 
-    const n = kid.name;
-    setAddedGoals(ag=>{const{[n]:_,...r}=ag;return r});
-    setLogs(lg=>{const{[n]:_,...r}=lg;return r});
-    setWeeklyDone(wd=>{const{[n]:_,...r}=wd;return r});
-    if(selectedKidId===kidId) setSelectedKidId("");
-  }
-
-  async function fsRemoveFamily(code:string){
-    const fam = families.find(f=>f.code===code); if(!fam) return;
-    if(!confirm(`Delete parent code ${code} (${fam.parentName})? This will remove ${fam.kids.length} student(s) and all their data.`)) return;
-    await deleteDoc(doc(db, "families", code));
-    fam.kids.forEach(k=>{
-      const n=k.name;
+      const n = kid.name;
       setAddedGoals(ag=>{const{[n]:_,...r}=ag;return r});
       setLogs(lg=>{const{[n]:_,...r}=lg;return r});
       setWeeklyDone(wd=>{const{[n]:_,...r}=wd;return r});
-    });
-    if(familyCode===code){ setFamilyCode(""); setSelectedKidId(""); setView("landing"); }
+      if(selectedKidId===kidId) setSelectedKidId("");
+    } catch (e:any) {
+      console.error("fsRemoveKid error:", e);
+      alert("Couldn’t remove student. Check Firestore rules & auth.");
+    }
+  }
+
+  async function fsRemoveFamily(code:string){
+    try {
+      const fam = families.find(f=>f.code===code); if(!fam) return;
+      if(!confirm(`Delete parent code ${code} (${fam.parentName})? This will remove ${fam.kids.length} student(s) and all their data.`)) return;
+      await deleteDoc(doc(db, "families", code));
+      fam.kids.forEach(k=>{
+        const n=k.name;
+        setAddedGoals(ag=>{const{[n]:_,...r}=ag;return r});
+        setLogs(lg=>{const{[n]:_,...r}=lg;return r});
+        setWeeklyDone(wd=>{const{[n]:_,...r}=wd;return r});
+      });
+      if(familyCode===code){ setFamilyCode(""); setSelectedKidId(""); setView("landing"); }
+    } catch (e:any) {
+      console.error("fsRemoveFamily error:", e);
+      alert("Couldn’t remove parent. Check Firestore rules & auth.");
+    }
   }
 
   // Incentives — current month
   async function fsAddIncentive(text:string){
-    const t = text.trim(); if(!t) return;
-    const dref = doc(db, "incentives", monthKey);
-    const snap = await getDoc(dref);
-    const items = (snap.exists() && Array.isArray((snap.data() as any).items)) ? (snap.data() as any).items : [];
-    items.push(t);
-    await setDoc(dref, { items }, { merge: true });
+    try{
+      const t = text.trim(); if(!t) return;
+      const dref = doc(db, "incentives", monthKey);
+      const snap = await getDoc(dref);
+      const items = (snap.exists() && Array.isArray((snap.data() as any).items)) ? (snap.data() as any).items : [];
+      items.push(t);
+      await setDoc(dref, { items }, { merge: true });
+    } catch(e:any){
+      console.error("fsAddIncentive error:", e);
+      alert("Couldn’t add incentive. Check Firestore rules & auth.");
+    }
   }
   async function fsRemoveIncentive(idx:number){
-    const dref = doc(db, "incentives", monthKey);
-    const snap = await getDoc(dref);
-    const items = (snap.exists() && Array.isArray((snap.data() as any).items)) ? (snap.data() as any).items : [];
-    if(idx>=0 && idx<items.length){ items.splice(idx,1); }
-    await setDoc(dref, { items }, { merge: true });
+    try{
+      const dref = doc(db, "incentives", monthKey);
+      const snap = await getDoc(dref);
+      const items = (snap.exists() && Array.isArray((snap.data() as any).items)) ? (snap.data() as any).items : [];
+      if(idx>=0 && idx<items.length){ items.splice(idx,1); }
+      await setDoc(dref, { items }, { merge: true });
+    } catch(e:any){
+      console.error("fsRemoveIncentive error:", e);
+      alert("Couldn’t remove incentive. Check Firestore rules & auth.");
+    }
   }
 
   // Reset all — clears Firestore families + incentives for safety (local states too)
   async function resetAll(){
-    if(!confirm("This will remove ALL families, kids, goals, logs, incentives, schools, and checkmarks. Continue?")) return;
-    // delete all families docs
-    const unsub = onSnapshot(collection(db,"families"), async (snap)=>{
-      const batchDeletes = Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
-      await batchDeletes;
-    });
-    unsub(); // stop listener quickly (we'll get another from main)
-    // (Optional) clear current month incentives doc
-    await setDoc(doc(db,"incentives", monthKey), { items: [] });
-    // local resets
-    setFamilies([]); setFamilyCode(""); setSelectedKidId("");
-    setAddedGoals({}); setLogs({}); setWeeklyDone({}); setIncentivesByMonth({});
-    setSchools([]); setView("landing");
+    try{
+      if(!confirm("This will remove ALL families, kids, goals, logs, incentives, schools, and checkmarks. Continue?")) return;
+      const unsub = onSnapshot(collection(db,"families"), async (snap)=>{
+        const batchDeletes = Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
+        await batchDeletes;
+      });
+      unsub();
+      await setDoc(doc(db,"incentives", monthKey), { items: [] });
+      setFamilies([]); setFamilyCode(""); setSelectedKidId("");
+      setAddedGoals({}); setLogs({}); setWeeklyDone({}); setIncentivesByMonth({});
+      setSchools([]); setView("landing");
+    } catch(e:any){
+      console.error("resetAll error:", e);
+      alert("Couldn’t reset data. Check Firestore rules & auth.");
+    }
   }
 
   // Backup / Restore (backup is local download; restore writes to Firestore families)
@@ -492,7 +526,6 @@ export default function App(){
       const text=await file.text(); const data=JSON.parse(text);
       if(!data||typeof data!=="object") throw new Error("Invalid JSON");
 
-      // restore families into Firestore
       if(Array.isArray(data.families)){
         for(const f of data.families){
           await setDoc(doc(db,"families", f.code), {
@@ -502,12 +535,10 @@ export default function App(){
           });
         }
       }
-      // restore incentives for current month only (simple)
       if (data.incentivesByMonth && data.incentivesByMonth[monthKey]) {
         await setDoc(doc(db,"incentives", monthKey), { items: data.incentivesByMonth[monthKey] });
       }
 
-      // restore local-only states
       setAddedGoals(data.addedGoals||{});
       setLogs(data.logs||{});
       setWeeklyDone(data.weeklyDone||{});
@@ -515,11 +546,18 @@ export default function App(){
       setGradeGoals(data.gradeGoals||{});
       setFamilyCode(""); setSelectedKidId(""); setView("landing");
       alert("Restore complete!");
-    } catch(e:any){ alert('Restore failed: '+(e?.message||'Unknown error')); }
+    } catch(e:any){ 
+      console.error("restoreAll error:", e);
+      alert('Restore failed: '+(e?.message||'Unknown error')); 
+    }
   }
 
   // runtime sanity tests
   useEffect(()=>{ const sample=new Date("2025-08-31T00:00:00Z"); console.assert(/August/.test(formatPrettyDate(sample)),"date month"); console.assert(/\d{4}-W\d{1,2}/.test(getWeekKey()),"week key"); const total=[{m:20},{m:15},{m:5}].reduce((s,x)=>s+(x.m||0),0); console.assert(total===40,"sum minutes"); },[]);
+
+  if (!authReady) {
+    return <div style={{ padding: 16, color: "#4B5563" }}>Loading…</div>;
+  }
 
   return (
     <div style={{minHeight: "100vh", background: "linear-gradient(180deg, #2B3990 0%, #1F2A6C 100%)"}}>
@@ -716,7 +754,7 @@ function ParentPanel({
   setSelectedKidId: (id:string)=>void;
   selectedKid: Kid | null;
   addedGoals: Record<string,{id:string;text:string}[]>;
-  weeklyDone: Record<string, Record<string,{base:string[];added:string[]}>>;
+  weeklyDone: Record<string, Record<string,{base:string[];added:string[] }>>;
   weekKey: string;
   incentives: string[];
   logs: Record<string,{ id:string; dateISO:string; prettyDate:string; title:string; author:string; minutes:number; pages:number; mood:"red"|"orange"|"yellow"|"green" }[]>;
@@ -931,9 +969,8 @@ function ChildView({
         </div>
         <div style={{marginTop:6, textAlign:"right", fontSize:13, color:BRAND.mutedText}}>
           Total minutes: <span style={{ color: BRAND.primary, fontWeight:600 }}>
-  {totalMinutes}
-</span>
-
+            {totalMinutes}
+          </span>
         </div>
       </div>
     </div>
@@ -1398,8 +1435,8 @@ function MinutesDashboard({
               <tr key={s.id} style={{ borderTop:`1px solid ${BRAND.border}` }}>
                 <td style={{padding:8}}>{s.name}</td>
                 <td style={{padding:8}}>{s.gradeLevel}</td>
-                <td style={{padding:8}}>{minutesByStudent[s.name]||0}</td>
-                <td style={{padding:8}}>{booksByStudent[s.name]||0}</td>
+                <td style={{padding:8}}>{(minutesByStudent[s.name]||0)}</td>
+                <td style={{padding:8}}>{(booksByStudent[s.name]||0)}</td>
               </tr>
             ))}
           </tbody>
