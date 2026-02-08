@@ -1,241 +1,74 @@
-import React, { useEffect, useMemo, useState, useRef } from "react";
-import { db, auth } from "./firebase";
-import {
-  collection,
-  doc,
-  setDoc,
-  updateDoc,
-  onSnapshot,
-  query,
-  where,
-  addDoc,
-  serverTimestamp
-} from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
+/* ... existing imports and types ... */
 
-/* =========================
-   Types
-   ========================= */
-type Organization = {
+type Incentive = {
   id: string;
-  name: string;
-  primaryColor: string;
-  accentColor: string;
-  logoUrl: string;
-  authProvider: "internal" | "procare" | "brightwheel";
+  title: string;
+  pointsRequired: number;
+  description: string;
+  icon: string; // e.g., "🍕", "🎮", "📚"
 };
 
-type Kid = {
-  id: string;
-  name: string;
-  gradeLevel: string;
-  readingLevel: string;
-  school: string;
-  orgId: string;
-};
+/* ... inside your App component ... */
 
-type Family = { 
-  code: string; 
-  parentName: string; 
-  kids: Kid[]; 
-  orgId: string; 
-};
-
-type ReadingSession = {
-  id?: string;
-  kidId: string;
-  orgId: string;
-  bookTitle: string;
-  transcript: string;
-  accuracy: number;
-  date: any;
-};
-
-const DEFAULT_BRAND = {
-  primary: "#2B3990",
-  accent: "#FFD200",
-  light: "#FFFFFF",
-  border: "#E5E7EB",
-};
-
-/* =========================
-   Main App Component
-   ========================= */
 export default function App() {
-  const [authReady, setAuthReady] = useState(false);
-  const [view, setView] = useState<"landing"|"orgSelect"|"parent"|"adminLogin"|"admin"|"readingTest">("landing");
-  const [activeOrg, setActiveOrg] = useState<Organization | null>(null);
-  const [families, setFamilies] = useState<Family[]>([]);
-  const [familyCode, setFamilyCode] = useState("");
-  const [selectedKidId, setSelectedKidId] = useState("");
-  
-  // AI Reading State
-  const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState("");
-  const recognitionRef = useRef<any>(null);
+  // Add this to your state list
+  const [view, setView] = useState<"landing"|"orgSelect"|"parent"|"adminLogin"|"admin"|"readingTest"|"prizes">("landing");
+  const [kidPoints, setKidPoints] = useState(150); // Mock points for now
 
-  const brand = activeOrg ? {
-    primary: activeOrg.primaryColor,
-    accent: activeOrg.accentColor,
-    light: "#FFFFFF",
-    border: "#E5E7EB"
-  } : DEFAULT_BRAND;
+  const incentives: Incentive[] = [
+    { id: "1", title: "Extra Recess", pointsRequired: 50, description: "15 minutes of extra outdoor time!", icon: "⚽" },
+    { id: "2", title: "Pizza Party", pointsRequired: 200, description: "One personal pan pizza coupon.", icon: "🍕" },
+    { id: "3", title: "Pick a Prize Box", pointsRequired: 100, description: "Choose one toy from the treasure chest.", icon: "🎁" },
+  ];
 
-  const currentFamily = useMemo(() => families.find(f => f.code === familyCode.trim()) || null, [families, familyCode]);
-  const selectedKid = useMemo(() => currentFamily?.kids.find(k => k.id === selectedKidId) || null, [currentFamily, selectedKidId]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => setAuthReady(!!user));
-    return () => unsub();
-  }, []);
-
-  useEffect(() => {
-    if (!authReady || !activeOrg) return;
-    const q = query(collection(db, "families"), where("orgId", "==", activeOrg.id));
-    return onSnapshot(q, (snap) => {
-      const next: Family[] = [];
-      snap.forEach(d => next.push(d.data() as Family));
-      setFamilies(next);
-    });
-  }, [authReady, activeOrg]);
-
-  /* =========================
-     AI Reading Logic
-     ========================= */
-  const startAssessment = () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("AI Reading is not supported in this browser. Please use Chrome.");
-      return;
-    }
-
-    recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = true;
-    recognitionRef.current.interimResults = true;
-
-    recognitionRef.current.onresult = (event: any) => {
-      let current = "";
-      for (let i = 0; i < event.results.length; i++) {
-        current += event.results[i][0].transcript;
-      }
-      setTranscript(current);
-    };
-
-    recognitionRef.current.start();
-    setIsRecording(true);
-  };
-
-  const stopAssessment = async () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-    setIsRecording(false);
-    
-    // Save Assessment to Firestore
-    if (selectedKid && activeOrg) {
-      await addDoc(collection(db, "reading_sessions"), {
-        kidId: selectedKid.id,
-        orgId: activeOrg.id,
-        transcript: transcript,
-        date: serverTimestamp(),
-        // We will add the AI "Grade Level" analysis in the next step
-      });
-      alert("Reading session saved! AI is analyzing the level...");
-      setView("parent");
-    }
-  };
-
-  if (!authReady) return <div style={{ padding: 20 }}>Initializing...</div>;
+  /* ... rest of your UI logic ... */
 
   return (
-    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${brand.primary} 0%, #1a1a1a 100%)`, color: "#fff", fontFamily: "sans-serif" }}>
+    <div style={{ /* ... your existing styles ... */ }}>
       
-      {/* Landing View */}
-      {view === "landing" && (
-        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
-          <div style={{ background: "#fff", color: "#333", padding: 30, borderRadius: 20, width: 350, textAlign: "center" }}>
-             {activeOrg && <img src={activeOrg.logoUrl} style={{ width: 60 }} alt="logo" />}
-             <h2>Read and Rise</h2>
-             <p>{activeOrg ? activeOrg.name : "Select an Organization to Start"}</p>
-             
-             {activeOrg ? (
-               <>
-                 <input 
-                   placeholder="Enter Family Code" 
-                   style={{ width: "100%", padding: 10, margin: "10px 0", borderRadius: 8, border: "1px solid #ccc" }}
-                   value={familyCode}
-                   onChange={(e) => setFamilyCode(e.target.value)}
-                 />
-                 <button 
-                   style={{ width: "100%", padding: 12, background: brand.primary, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}
-                   onClick={() => setView("parent")}
-                 >
-                   Log In
-                 </button>
-               </>
-             ) : (
-               <button className="btn" onClick={() => setView("orgSelect")}>Choose Program</button>
-             )}
-          </div>
-        </div>
-      )}
-
-      {/* Org Select View */}
-      {view === "orgSelect" && (
-        <div style={{ padding: 40, textAlign: "center" }}>
-          <h3>Select Your Program</h3>
-          <button onClick={() => { setActiveOrg({ id: "EAKC", name: "EAKC", primaryColor: "#2B3990", accentColor: "#FFD200", logoUrl: "", authProvider: "internal" }); setView("landing"); }}>EAKC</button>
-          <button style={{ marginLeft: 10 }} onClick={() => { setActiveOrg({ id: "YMCA", name: "YMCA", primaryColor: "#ff1100", accentColor: "#333", logoUrl: "", authProvider: "internal" }); setView("landing"); }}>YMCA</button>
-        </div>
-      )}
-
-      {/* Parent/Kid Selector View */}
-      {view === "parent" && currentFamily && (
+      {/* ADD THIS: Prize Shop View */}
+      {view === "prizes" && selectedKid && (
         <div style={{ padding: 20 }}>
-          <h2>Welcome, {currentFamily.parentName}</h2>
-          <p>Select a child to log reading or start an AI assessment:</p>
-          {currentFamily.kids.map(kid => (
-            <div key={kid.id} style={{ background: "rgba(255,255,255,0.1)", padding: 15, borderRadius: 12, marginBottom: 10, display: "flex", justifyContent: "space-between" }}>
-              <span>{kid.name} (Grade: {kid.gradeLevel})</span>
-              <button 
-                onClick={() => { setSelectedKidId(kid.id); setView("readingTest"); }}
-                style={{ background: brand.accent, border: "none", padding: "5px 10px", borderRadius: 5, fontWeight: "bold" }}
-              >
-                Start AI Reading
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Reading Test View (The AI Part) */}
-      {view === "readingTest" && selectedKid && (
-        <div style={{ padding: 30, textAlign: "center" }}>
-          <button onClick={() => setView("parent")} style={{ float: "left", color: "#fff", background: "none", border: "none" }}>← Back</button>
-          <h2>Reading Assessment</h2>
-          <p>Child: <strong>{selectedKid.name}</strong></p>
+          <button onClick={() => setView("parent")} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer" }}>← Back</button>
           
-          <div style={{ background: "#fff", color: "#333", minHeight: 200, borderRadius: 15, padding: 20, margin: "20px 0", fontSize: 20 }}>
-            {transcript || "Click 'Start' and have the child read a page from their book out loud..."}
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <h2 style={{ fontSize: 32 }}>🏆 Prize Shop</h2>
+            <div style={{ background: brand.accent, color: brand.primary, display: "inline-block", padding: "10px 20px", borderRadius: 20, fontWeight: "bold", fontSize: 24 }}>
+              {kidPoints} Points Available
+            </div>
           </div>
 
-          {!isRecording ? (
-            <button 
-              onClick={startAssessment}
-              style={{ padding: "15px 40px", fontSize: 18, borderRadius: 50, border: "none", background: "#2ecc71", color: "#fff", cursor: "pointer" }}
-            >
-              🎤 Start Reading
-            </button>
-          ) : (
-            <button 
-              onClick={stopAssessment}
-              style={{ padding: "15px 40px", fontSize: 18, borderRadius: 50, border: "none", background: "#e74c3c", color: "#fff", cursor: "pointer" }}
-            >
-              Stop & Analyze
-            </button>
-          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 15 }}>
+            {incentives.map(item => (
+              <div key={item.id} style={{ background: "white", color: "#333", borderRadius: 15, padding: 15, textAlign: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.2)" }}>
+                <div style={{ fontSize: 40 }}>{item.icon}</div>
+                <h4 style={{ margin: "10px 0 5px 0" }}>{item.title}</h4>
+                <p style={{ fontSize: 12, color: "#666", minHeight: 40 }}>{item.description}</p>
+                <button 
+                  disabled={kidPoints < item.pointsRequired}
+                  style={{ 
+                    width: "100%", 
+                    padding: 8, 
+                    borderRadius: 8, 
+                    border: "none", 
+                    background: kidPoints >= item.pointsRequired ? brand.primary : "#ccc", 
+                    color: "white",
+                    fontWeight: "bold"
+                  }}
+                >
+                  {kidPoints >= item.pointsRequired ? `Redeem ${item.pointsRequired}pts` : "Need More Points"}
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
+      
+      {/* Update your Kid list in the 'parent' view to include a "Prizes" button */}
+      {/* ... where you map through kids ... */}
+      <button onClick={() => { setSelectedKidId(kid.id); setView("prizes"); }} style={{ marginLeft: 10, background: "#fff", color: brand.primary, border: "none", padding: "5px 10px", borderRadius: 5 }}>
+        🎁 Shop
+      </button>
 
     </div>
   );
